@@ -1,0 +1,170 @@
+---
+title: "Obdurate Movie Review Sentiment Analysis - R"
+author: "Chris Selig"
+date: "June 24, 2017"
+output:
+  word_document: default
+  html_document: default
+tags: R, Sentiment Analysis, Movie Reviews
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r, include=FALSE}
+#Load libraries
+library(XML); library(tidyverse);library(stringr);library(lubridate);library(tidytext)
+library(ggplot2);library(wordcloud);library(reshape2)
+```
+```{r, include=FALSE, cache=TRUE}
+#Load data
+rawdata <- xmlToDataFrame("//CARNAGE-MOBILE/Personal/R coding/Data/deepdoop_movies.xml")
+con <- file("//CARNAGE-MOBILE/Personal/R coding/Data/profane_list.txt", open = "r")
+profanedata <- readLines(con)
+profanedata <- as.data.frame(profanedata)
+
+#Begin tidying data
+tidydata <- rawdata %>%
+  select(filmname,score,quote,reviewdate) %>%
+  filter(!is.na(reviewdate)) 
+
+#Clean up names
+names(tidydata) <- c("filmName","rating","reviewText","reviewDate") 
+
+#Convert ratings to integer
+tidydata$rating <- as.numeric(tidydata$rating)
+```
+
+#Summary
+The goal of this analysis was to jump into my first foray into text analysis using data from someone I was pretty familiar with, my brother (aka Obdurate).  Whenever we see movies, especially together, we like to discuss our thoughts and our ratings for the movies to see how we agree/disagree with the other's comments.  
+
+Using the data from his [Criticker account](https://www.criticker.com/profile/Obdurate), I explored his 1900+ movie reviews using [Sentiment Analysis](https://en.wikipedia.org/wiki/Sentiment_analysis) in R.  Sentiment analysis is used to identify the overall sentiment in a text data set.
+
+The raw data was accessed March 29th, 2017 and can be found on my [Github](https://github.com/chrisselig/ObdurateSentimentAnalysis) page, along with the associated R code so you can reproduce my analysis. 
+
+##Sentiment Analysis
+
+First, let's take a look at the individual words used in Obdurate's reviews, and their frequency counts.  I used tokenization (create one word per row) using the [tidytext package](https://cran.r-project.org/web/packages/tidytext/index.html), and removed unnecessary words (stop words) like "the" and "of" from the dataset because they are not useful or interesting for my purposes.
+
+
+```{r, echo=FALSE, include=FALSE}
+
+#Tidy the handwritten reviews by obdurate, to do some analysis
+reviews <- data_frame(tidydata$reviewText)
+reviews <- reviews[!reviews$`tidydata$reviewText`=="",]
+names(reviews) <- "word"
+
+reviews <- reviews %>%
+    unnest_tokens(word,word)
+
+data(stop_words)
+
+#remove certain words from being seen as negative (funny, plot, silly)
+custom_stop_words <- bind_rows(data_frame(word = c("funny","plot","silly"),
+                                          lexicon = c("custom")),
+                               stop_words)
+
+#Remove stop words ("the","of", "to", etc)
+reviews <- reviews %>%
+    anti_join(custom_stop_words)
+
+#Remove Profanity
+reviews <- reviews[!reviews$word%in%profanedata$profanedata,]
+#reviews <- reviews %>%
+#  anti_join(profanedata, by = c("word" = "profanedata"))
+```
+
+```{r, echo=FALSE, fig.align="center"}
+#Plot word counts
+reviews %>%
+    count(word, sort = TRUE) %>%
+    filter(n > 150) %>%
+    mutate(word = reorder(word,n)) %>%
+    ggplot(aes(word,n)) +
+    geom_col() + 
+    coord_flip() + 
+    labs (x = "Word", y = "Frequency", title = "Word Frequencies With Greater than 150 Occurences")+
+    theme_classic()
+
+```
+
+The plot shows the highest frequency words used, that have greater than 150 occurrences within the reviews.  Not surprisingly, the most popular word by far was "movie", and similar words like "movies" and "film" are also very popular.  Just from looking at the most frequent words, you can already see some positive words like "pretty" and "love" and even a negative word "bad."     
+
+Now for a comparison between the positive and negative words.  The lexicon used for this analysis was generated through crowdsourcing, or through the labor of one of the authors that created the tidytext package used in the sentiment analysis.  The construct was then validated against another form of crowdsourcing like restaurant reviews.  
+
+```{r, echo=FALSE, include=FALSE, fig.align="center", fig.show="hold", fig.width=3, fig.height=3}
+sentMovies <- tidydata %>%
+  group_by(filmName) %>%
+  mutate(
+    movie = filmName) %>% #added so I can keep track of the movie the word is from
+  ungroup() %>%
+  unnest_tokens(word,reviewText)
+
+#Get the words labelled as "positive" from the nrc sentiments package
+nrcPositive <- get_sentiments("nrc") %>%
+  filter(sentiment == "positive")
+
+#Join review text on positive words
+sentMovies %>%
+  inner_join(nrcPositive) %>%
+  count(word, sort = TRUE)
+
+#Compare positive and negative words
+bing_word_counts <- sentMovies %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+```
+
+Plotted below is a word cloud that plots the top 100 words, and colors based on whether they are positive or negative.  The larger the word, the more times it was used.  Note, the size of a word in one category cannot be directly compared to the size of a word in the other category.
+
+```{r, echo=FALSE, message=FALSE, fig.width=7, fig.align="center"}
+reviews %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word,sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("#F8766D", "#00BFC4"),
+                   max.words =300, scale = c(4,0.4))
+```
+
+Taking a closer look, here are the top 10 negative and positive words.
+
+```{r, echo=FALSE, message=FALSE}
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  mutate(word = reorder(word,n)) %>%
+  ggplot(aes(word,n,fill = sentiment)) + 
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~sentiment,scales = "free_y") + 
+  labs(y="Contribution to sentiment",
+       x = NULL, title = "Top 10 Negative and Positive Words")+
+  coord_flip() +
+  theme_classic()
+```
+
+There are some anomalies in the data, for example, "funny" and "plot", which are classified as negative words.  Plot would be classified as a negative word because the lexicon thinks it's a secret plan by a group of people to do something illegal, instead of the main events of a movie.  This is probably because the lexicon I used was not specifically for movie reviews, but rather restaurant reviews.  On the other side, the positive words all look legitimate.  
+
+Looking at the frequencies of the positive and negative words, it appears that Obdurate's reviews are mostly positive.  For fun, let's test this theory by plotting the frequency of his review scores, but first a quick blurb on how Obdurate review scoring system works.    
+
+Obdurate reviews on a 100-point scoring system, but the methodology of assigning a score has changed over time.  He used to assign scores such as "82" but realized he could not really describe what makes an "82" worse than an "83", and has abandoned it.  The simplified version scores uses increments of 5.  So, the "82" would most likely be an "80" while "83" would turn into an "80" or "85"
+
+```{r echo=FALSE, fig.align="center"}
+#Most frequent ratings
+ratingsdist <- tidydata %>%
+  group_by(rating) %>%
+  summarize(
+    ratingCount = n()) %>%
+  ggplot(mapping = aes(x = rating, y = ratingCount)) + 
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = ratingCount), vjust = -1.0, colour = "black", size = 2)+
+  labs(x = "Rating", y = "Rating Frequency", title = "Rating Frequencies")+
+  scale_x_continuous(breaks = seq(0,100,by = 5))+
+  theme_classic()
+ratingsdist
+medianscore <- median(tidydata$rating)
+meanscore <- round(mean(tidydata$rating))
+```
+
+As suspected, the majority of Obdurate's ratings are positive with a median score of `r medianscore`, and a mean of `r meanscore`.  Note, Obdurate's ratings between 50-59 Obdurate describes as "on the fence", which translates to he likes it but probably would not recommend it to others, so every score 50 or both can be classified as "positive" or that he "liked" the movie. 
